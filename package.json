@@ -1,0 +1,23 @@
+{
+  "name": "pythonmaster",
+  "version": "0.1.0",
+  "description": "Companion CLI for the CDRCA pythonmaster plugin. Scaffolds and runs real Python/FastAPI backends for CDRCA projects. Does not modify CDRCA itself.",
+  "bin": {
+    "pythonmaster": "bin/pythonmaster.js"
+  },
+  "main": "plugin.js",
+  "engines": {
+    "node": ">=16"
+  },
+  "license": "IOSL",
+  "devDependencies": {
+    "jsdom": "^24.0.0"
+  },
+  "files": [
+    "cdrca.json",
+    "plugin.js",
+    "bin",
+    "templates",
+    "README.md"
+  ]
+}

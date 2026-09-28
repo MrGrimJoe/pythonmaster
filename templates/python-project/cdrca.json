@@ -1,0 +1,7 @@
+{
+  "name": "__PROJECT_NAME__",
+  "version": "0.1.0",
+  "description": "A CDRCA PythonMaster project.",
+  "runtime": "python",
+  "entry": "main.py"
+}

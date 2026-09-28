@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>__PROJECT_NAME__</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+  <main>
+    <h1>__PROJECT_NAME__</h1>
+    <p>This page is served by <code>main.py</code>. Edit it freely.</p>
+
+    <button id="load-users">Load users from /api/users</button>
+    <ul id="users"></ul>
+
+    <form id="add-user">
+      <input id="new-name" placeholder="name" required />
+      <button type="submit">Add user (POST /api/users, saved to SQLite)</button>
+    </form>
+  </main>
+
+  <script>
+    function loadUsers() {
+      fetch("/api/users")
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          var list = document.getElementById("users");
+          list.innerHTML = "";
+          data.users.forEach(function (u) {
+            var li = document.createElement("li");
+            li.textContent = u.name;
+            list.appendChild(li);
+          });
+        });
+    }
+
+    document.getElementById("load-users").addEventListener("click", loadUsers);
+
+    document.getElementById("add-user").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var input = document.getElementById("new-name");
+      fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: input.value }),
+      }).then(function () {
+        input.value = "";
+        loadUsers();
+      });
+    });
+
+    loadUsers();
+  </script>
+</body>
+</html>

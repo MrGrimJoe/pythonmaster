@@ -1,0 +1,175 @@
+name: pythonmaster tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch: {}
+
+jobs:
+  # -------------------------------------------------------------------
+  # Unit tests + the real full-pipeline integration test, run against
+  # an actual checkout of the main CDRCA repo (not a mock of it).
+  # -------------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pythonmaster
+        uses: actions/checkout@v4
+        with:
+          path: pythonmaster
+
+      - name: Checkout main CDRCA repo (for the real transpiler/tokenizer)
+        uses: actions/checkout@v4
+        with:
+          repository: MrGrimJoe/cdrca-ready-for-the-real-world
+          path: cdrca-runtime-checkout
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install jsdom (used by one integration test; skips gracefully if absent)
+        working-directory: pythonmaster
+        run: npm install --no-save jsdom
+
+      - name: Run the full test suite
+        working-directory: pythonmaster
+        env:
+          # cdrca-reactive-state's own tests use this exact convention:
+          # point at the directory that directly contains Back-end/, not
+          # the repo root.
+          CDRCA_RUNTIME_PATH: ${{ github.workspace }}/cdrca-runtime-checkout/cli/src/templates/cdrca-runtime
+        run: node tests/run.js
+
+      - name: Show what CDRCA_RUNTIME_PATH resolved to, for debugging a future path change
+        if: always()
+        run: |
+          echo "CDRCA_RUNTIME_PATH=$CDRCA_RUNTIME_PATH"
+          ls -la "$CDRCA_RUNTIME_PATH/Back-end/Transpiler" 2>&1 | head -20 || echo "(path did not resolve — main repo's layout may have changed; update the path above)"
+        env:
+          CDRCA_RUNTIME_PATH: ${{ github.workspace }}/cdrca-runtime-checkout/cli/src/templates/cdrca-runtime
+
+  # -------------------------------------------------------------------
+  # Real SSH deploy, end to end: an actual local sshd + systemd on the
+  # runner (GitHub-hosted ubuntu-latest runners are full VMs with
+  # systemd as PID 1 — this genuinely cannot be tested inside most
+  # sandboxed containers, which is why this couldn't be verified before
+  # this workflow existed). deploytest@127.0.0.1 plays the role of "the
+  # user's server"; the same runner is also "the developer's machine".
+  # -------------------------------------------------------------------
+  deploy-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pythonmaster
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install a real sshd + sshpass (to simulate a human typing a password once) + venv
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openssh-server sshpass python3-venv
+
+      - name: Create a throwaway "server" user and enable password auth for the one-time bootstrap step
+        run: |
+          sudo useradd -m -s /bin/bash deploytest
+          echo "deploytest:${{ 'pythonmaster-test-pass-' }}${{ github.run_id }}" | sudo chpasswd
+          sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+          # Confirm sshd is actually up before anything tries to use it.
+          sudo systemctl status ssh --no-pager || true
+
+      - name: Shim `ssh` on PATH to auto-supply the password (stands in for a human typing it once — pythonmaster's own code never sees or stores it)
+        run: |
+          mkdir -p "$HOME/ssh-shim"
+          cat > "$HOME/ssh-shim/ssh" <<'EOF'
+          #!/bin/bash
+          exec sshpass -p "$PYTHONMASTER_TEST_SSH_PASS" /usr/bin/ssh "$@"
+          EOF
+          chmod +x "$HOME/ssh-shim/ssh"
+          echo "$HOME/ssh-shim" >> "$GITHUB_PATH"
+        env:
+          PYTHONMASTER_TEST_SSH_PASS: pythonmaster-test-pass-${{ github.run_id }}
+
+      - name: pythonmaster new
+        run: node bin/pythonmaster.js new e2eapp
+
+      - name: pythonmaster deploy setup (real SSH, real password prompt via the shim, real key install)
+        working-directory: e2eapp
+        env:
+          PYTHONMASTER_TEST_SSH_PASS: pythonmaster-test-pass-${{ github.run_id }}
+        run: |
+          printf "127.0.0.1\ndeploytest\n22\n/home/deploytest/e2eapp\n" | node ../bin/pythonmaster.js deploy setup
+          echo "--- saved config (no secrets in it — just host/user/port/path/key path) ---"
+          cat .pythonmaster/deploy.json
+
+      - name: pythonmaster deploy (real upload, real remote venv+pip, real systemd --user service)
+        working-directory: e2eapp
+        run: |
+          echo "" | node ../bin/pythonmaster.js deploy | tee /tmp/deploy-output.log
+
+      - name: Verify the deployed app actually responds
+        run: |
+          PORT=$(grep -oP 'running on the server at 127\.0\.0\.1:\K[0-9]+' /tmp/deploy-output.log)
+          echo "Deployed on port $PORT"
+          for i in $(seq 1 10); do
+            if curl -sf "http://127.0.0.1:$PORT/api/users" > /tmp/response.json; then break; fi
+            sleep 1
+          done
+          cat /tmp/response.json
+          grep -q '"name"' /tmp/response.json
+
+      - name: pythonmaster deploy again (idempotent redeploy re-uses the same port)
+        working-directory: e2eapp
+        run: |
+          echo "" | node ../bin/pythonmaster.js deploy | tee /tmp/redeploy-output.log
+          diff <(grep -oP '127\.0\.0\.1:\K[0-9]+' /tmp/deploy-output.log | head -1) \
+               <(grep -oP '127\.0\.0\.1:\K[0-9]+' /tmp/redeploy-output.log | head -1)
+
+      # -----------------------------------------------------------------
+      # Debugging pipeline: on ANY failure above, dump everything needed
+      # to diagnose it without re-running — sshd's own log, the deployed
+      # service's systemd status + full journal, and the resolved
+      # absolute remote path, all in one place in the Actions log.
+      # -----------------------------------------------------------------
+      - name: On failure — dump sshd logs
+        if: failure()
+        run: sudo journalctl -u ssh --no-pager -n 200 || true
+
+      - name: On failure — dump the deployed app's systemd status + journal
+        if: failure()
+        run: |
+          UID_DEPLOYTEST=$(id -u deploytest)
+          echo "=== systemctl --user status (as deploytest) ==="
+          sudo -u deploytest XDG_RUNTIME_DIR=/run/user/$UID_DEPLOYTEST \
+            systemctl --user status 'pythonmaster-*' --no-pager || true
+          echo "=== journalctl --user (as deploytest) ==="
+          sudo -u deploytest XDG_RUNTIME_DIR=/run/user/$UID_DEPLOYTEST \
+            journalctl --user -u 'pythonmaster-*' --no-pager -n 200 || true
+          echo "=== loginctl show-user deploytest (checks whether lingering is actually enabled) ==="
+          loginctl show-user deploytest || true
+
+      - name: On failure — dump the remote directory contents and generated unit file
+        if: failure()
+        run: |
+          echo "=== /home/deploytest/e2eapp ==="
+          sudo find /home/deploytest/e2eapp -maxdepth 2 2>&1 || true
+          echo "=== generated systemd unit ==="
+          sudo cat /home/deploytest/.config/systemd/user/pythonmaster-e2eapp.service 2>&1 || true
+
+      - name: On failure — dump this workflow's own deploy output
+        if: failure()
+        run: |
+          echo "=== deploy setup / deploy stdout+stderr ==="
+          cat /tmp/deploy-output.log 2>&1 || true
+          cat /tmp/redeploy-output.log 2>&1 || true
