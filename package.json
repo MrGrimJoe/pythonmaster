@@ -9,7 +9,7 @@
   "engines": {
     "node": ">=16"
   },
-  "license": "IOSL",
+  "license": "SEE LICENSE IN LICENSE.md",
   "devDependencies": {
     "jsdom": "^24.0.0"
   },

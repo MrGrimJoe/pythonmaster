@@ -256,3 +256,7 @@ it won't survive a crash or reboot the way the `systemd` path does) —
 and why `deploy-e2e` runs specifically on a GitHub-hosted runner, to get
 one real confirmation that the `systemd` path itself works somewhere
 this sandbox can't provide.
+
+## License
+
+MrMIB License v1.0 -- see [LICENSE.md](./LICENSE.md). Free to use, credit required, no derivatives unless a project README says otherwise, no resale of the software itself.
