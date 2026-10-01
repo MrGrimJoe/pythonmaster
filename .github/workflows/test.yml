@@ -173,3 +173,93 @@ jobs:
           echo "=== deploy setup / deploy stdout+stderr ==="
           cat /tmp/deploy-output.log 2>&1 || true
           cat /tmp/redeploy-output.log 2>&1 || true
+
+  # -------------------------------------------------------------------
+  # The CDRCA package: pythonmaster-<version>.mrmib, built by the real
+  # `cdrca pack` from the real CDRCA CLI source. Proves the .mrmib
+  # committed in this repo is up to date, that `cdrca install` accepts it,
+  # and leaves a freshly built copy as an artifact (attached to the
+  # release on a version tag).
+  # -------------------------------------------------------------------
+  mrmib:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # only used to attach the file to a release on a tag
+    steps:
+      - name: Checkout pythonmaster
+        uses: actions/checkout@v4
+        with:
+          path: pythonmaster
+
+      - name: Checkout main CDRCA repo (the `cdrca` CLI source)
+        uses: actions/checkout@v4
+        with:
+          repository: MrGrimJoe/cdrca-ready-for-the-real-world
+          path: cdrca-checkout
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cdrca-checkout/cli
+
+      - name: Build the cdrca CLI
+        working-directory: cdrca-checkout/cli
+        run: cargo build --release --locked
+
+      - name: Read the package version
+        id: pkg
+        working-directory: pythonmaster
+        run: |
+          VERSION="$(node -p "require('./cdrca.json').version")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          case "$GITHUB_REF" in
+            refs/tags/v*)
+              if [ "${GITHUB_REF_NAME#v}" != "$VERSION" ]; then
+                echo "::error::tag $GITHUB_REF_NAME does not match cdrca.json version $VERSION"
+                exit 1
+              fi
+              ;;
+          esac
+
+      - name: Pack with the real `cdrca pack`
+        working-directory: pythonmaster
+        run: |
+          "$GITHUB_WORKSPACE/cdrca-checkout/cli/target/release/cdrca" pack --out "$RUNNER_TEMP/pythonmaster-${{ steps.pkg.outputs.version }}.mrmib"
+
+      - name: The committed .mrmib must match what pack builds now
+        working-directory: pythonmaster
+        run: |
+          CDRCA="$GITHUB_WORKSPACE/cdrca-checkout/cli/target/release/cdrca"
+          NAME="pythonmaster-${{ steps.pkg.outputs.version }}.mrmib"
+          test -f "$NAME" || { echo "::error::$NAME is not committed in the repo root. Run: cdrca pack --out $NAME"; exit 1; }
+          built="$("$CDRCA" info "$RUNNER_TEMP/$NAME" | grep 'payload integrity')"
+          committed="$("$CDRCA" info "$NAME" | grep 'payload integrity')"
+          echo "built:     $built"
+          echo "committed: $committed"
+          if [ "$built" != "$committed" ]; then
+            echo "::error::$NAME is out of date (plugin.js or cdrca.json changed). Rebuild it: cdrca pack --out $NAME, and commit it."
+            exit 1
+          fi
+
+      - name: cdrca can install it
+        run: |
+          export HOME="$RUNNER_TEMP/home" && mkdir -p "$HOME"
+          mkdir "$RUNNER_TEMP/proj" && cd "$RUNNER_TEMP/proj"
+          echo '{"name":"demo","version":"0.1.0","description":"demo","type":"app","entry":"main.cdrca","icon":"","author":"","license":"IOSL","repository":"","dependencies":{},"permissions":[]}' > cdrca.json
+          : > main.cdrca
+          echo y | "$GITHUB_WORKSPACE/cdrca-checkout/cli/target/release/cdrca" install "$RUNNER_TEMP/pythonmaster-${{ steps.pkg.outputs.version }}.mrmib"
+          "$GITHUB_WORKSPACE/cdrca-checkout/cli/target/release/cdrca" list | grep -F "pythonmaster@${{ steps.pkg.outputs.version }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pythonmaster-mrmib
+          path: ${{ runner.temp }}/pythonmaster-${{ steps.pkg.outputs.version }}.mrmib
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach to the release (version tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ runner.temp }}/pythonmaster-${{ steps.pkg.outputs.version }}.mrmib

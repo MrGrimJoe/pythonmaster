@@ -4,7 +4,7 @@
   "description": "Python/FastAPI backend integration for CDRCA. Lets .cdrca files declare backend API calls (pythonapi), and ships a companion CLI (bin/pythonmaster.js) that scaffolds and runs real Python/FastAPI projects. Does not modify the CDRCA compiler or CLI.",
   "type": "plugin",
   "entry": "plugin.js",
-  "icon": "icon.png",
+  "icon": "",
   "author": "",
   "license": "SEE LICENSE IN LICENSE.md",
   "repository": "",

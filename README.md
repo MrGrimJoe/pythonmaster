@@ -43,6 +43,33 @@ This gives you the `pythonmaster` command. If you also want `pythonapi`
 syntax available inside a CDRCA project, additionally run
 `cdrca install pythonmaster` inside that project.
 
+### As a CDRCA package (`.mrmib`)
+
+The repo root also contains **`pythonmaster-0.1.0.mrmib`**, the same plugin
+packed in CDRCA's own package format (built with the real `cdrca pack`). Install
+it into a CDRCA project without the registry:
+
+```
+cdrca install ./pythonmaster-0.1.0.mrmib
+```
+
+It shows the permissions the plugin asks for (none) and the one hook it uses
+(`syntax :: customRule`) before installing, like any other plugin. Inspect it
+without installing: `cdrca info ./pythonmaster-0.1.0.mrmib`.
+
+What is inside: `cdrca.json` and `plugin.js` only. That is everything CDRCA
+itself loads (`cdrca pack` packs a manifest, its entry file, icon and
+libraries), so the **`pythonmaster` command** (`new`, `run`, `add`, `deploy`)
+is *not* in the `.mrmib` -- it comes from `npm install -g ./pythonmaster` above.
+
+After changing `plugin.js` or `cdrca.json`, rebuild and commit it:
+
+```
+cdrca pack --out pythonmaster-<version>.mrmib
+```
+
+`tests/mrmib.test.js` and the `mrmib` CI job both fail if it is out of date.
+
 ## Local development
 
 ```
@@ -193,6 +220,7 @@ Runs, always, with no external checkout needed:
 - `plugin.test.js` — unit tests for `pythonapi`, against a hand-built fake token stream
 - `cli.test.js` — real end-to-end local dev: scaffolds a project, runs it for real, hits `GET`/`POST /api/users` and static assets over real HTTP, runs `add`
 - `deploy.test.js` — deploy fails cleanly (no hang) without config; the interactive setup prompts are correctly consumed end to end; a real ed25519 key gets generated with the right permissions
+- `mrmib.test.js` — the committed `pythonmaster-<version>.mrmib` is intact (its checksum matches), names this package and version, and holds `cdrca.json` and `plugin.js` byte-identical to the repo's copies. Needs only Node.
 
 Additionally, if `CDRCA_RUNTIME_PATH` is set to
 `<checkout of MrGrimJoe/cdrca-ready-for-the-real-world>/cli/src/templates/cdrca-runtime`:
@@ -201,7 +229,7 @@ Additionally, if `CDRCA_RUNTIME_PATH` is set to
 
 ### GitHub Actions
 
-`.github/workflows/test.yml` has two jobs:
+`.github/workflows/test.yml` has three jobs:
 
 - **`test`** — checks out this repo and, separately,
   `MrGrimJoe/cdrca-ready-for-the-real-world`, then runs `tests/run.js`
@@ -220,6 +248,12 @@ Additionally, if `CDRCA_RUNTIME_PATH` is set to
   re-running it. This job needs a real VM with `systemd`, which is why
   it's a GitHub Actions job and not something this package can verify
   during local development (see the note below).
+
+- **`mrmib`** — builds the real `cdrca` CLI from the second checkout, runs
+  `cdrca pack`, and fails if the `.mrmib` committed in this repo is out of
+  date. It then runs `cdrca install` on it in a scratch project, uploads the
+  freshly built file as the `pythonmaster-mrmib` artifact, and on a `v*` tag
+  attaches it to the release.
 
 ### What was actually run, not just written, while building this
 
